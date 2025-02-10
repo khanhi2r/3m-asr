@@ -4,7 +4,7 @@ Supportive modules to conduct distributed training
 import torch
 import torch.nn as nn
 from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
-from .utils import get_torch_default_comm
+from .utils import get_torch_default_comm, get_rank_0_in_comm
 
 
 class DistributedGroupedDataParallel(nn.Module):
@@ -25,10 +25,9 @@ class DistributedGroupedDataParallel(nn.Module):
     def __init__(
         self,
         module,
-        mp_group=None,
-        dp_group=None,
-        world_group=None,
         auto_allreduce=False,
+        need_sync=True,
+        **kwargs
     ):
         assert not auto_allreduce, "Automatic all-reduce is not implemented yet"
 
@@ -36,18 +35,14 @@ class DistributedGroupedDataParallel(nn.Module):
         self.module = module
 
         self.comms = dict()
-        if mp_group is not None:
-            self.comms["mp"] = mp_group
-        if dp_group is not None:
-            self.comms["dp"] = dp_group
-        else:
-            self.comms["dp"] = get_torch_default_comm()
-        if world_group is None:
-            self.comms["world"] = get_torch_default_comm()
-        else:
-            self.comms["world"] = world_group
+        for k in kwargs:
+            if k.endswith('_group'):
+                self.comms[k[:-6]] = kwargs[k]
+        for k in ['dp', 'gate', 'moe', 'world']:
+            if k not in self.comms:
+                self.comms[k] = get_torch_default_comm()
 
-        def allreduce_params(no_scale=False,
+        def allreduce_gradients(no_scale=False,
                 reduce_after=False, fp32_allreduce=False):
             groups = dict()
             for p in self.module.parameters():
@@ -73,21 +68,23 @@ class DistributedGroupedDataParallel(nn.Module):
                 if not no_scale and not reduce_after:
                     coalesced /= comm.size()
                 torch.distributed.all_reduce(coalesced, group=comm)
-                torch.cuda.synchronize()
                 if not no_scale and reduce_after:
                     coalesced /= comm.size()
                 synced = _unflatten_dense_tensors(coalesced, grads)
                 for g, s in zip(grads, synced):
                     g.copy_(s)
 
+        def allreduce_params(*args, **kwargs):
+            return allreduce_gradients(*args, **kwargs)
+
+        self.allreduce_gradients = allreduce_gradients
         self.allreduce_params = allreduce_params
-        self._sync_params()
+        if need_sync:
+            self._sync_params()
 
     def _sync_params(self):
         groups = dict()
         for p in self.module.parameters():
-            if not p.requires_grad or p.grad is None:
-                continue
             if hasattr(p, "dp_comm"):
                 dp_comm = p.dp_comm
             else:
@@ -103,7 +100,8 @@ class DistributedGroupedDataParallel(nn.Module):
             comm = self.comms[dp_comm]
             datas = [p.data for p in group]
             coalesced = _flatten_dense_tensors(datas)
-            torch.distributed.broadcast(coalesced, 0, group=comm)
+            torch.distributed.broadcast(coalesced,
+                    get_rank_0_in_comm(comm), group=comm)
             torch.cuda.synchronize()
             synced = _unflatten_dense_tensors(coalesced, datas)
             for d, s in zip(datas, synced):

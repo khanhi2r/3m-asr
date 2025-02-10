@@ -25,19 +25,20 @@ if __name__ == '__main__':
             CUDAExtension(
                 name='fmoe_cuda',
                 sources=[
-                    'cuda/moe.cpp',
-                    'cuda/cuda_stream_manager.cpp',
-                    'cuda/moe_compute_kernel.cu',
-                    'cuda/moe_comm_kernel.cu',
-                    'cuda/moe_fused_kernel.cu',
-                    ],
+                    'cuda/balancing.cu',
+                    'cuda/fmoe_cuda.cpp',
+                    'cuda/global_exchange.cpp',
+                    'cuda/local_exchange.cu',
+                    'cuda/parallel_linear.cu',
+                    'cuda/stream_manager.cpp',
+                ],
                 extra_compile_args={
                     'cxx': cxx_flags,
                     'nvcc': cxx_flags
                     },
                 libraries=ext_libs,
-                include_dirs=['/usr/local/nccl/include'],  # put your nccl path here
-                library_dirs=['/usr/local/nccl/lib']  # put your nccl path here
+                    include_dirs=['/home/khanh/ws/miniforge3/envs/moe/lib/python3.13/site-packages/nvidia/nccl/include'],  # put your nccl path here
+                    library_dirs=['/home/khanh/ws/miniforge3/envs/moe/lib/python3.13/site-packages/nvidia/nccl/lib']  # put your nccl path here
                 )
             ],
         cmdclass={
